@@ -1,0 +1,120 @@
+/*
+===============================================================================
+DDL Script: Create Silver Tables
+===============================================================================
+Purpose:
+    Creates the silver layer tables in dev_dw.silver.
+    Existing tables are replaced (CREATE OR REPLACE), keeping Delta history.
+
+Warning:
+    Running this script recreates the tables and removes their current data.
+===============================================================================
+*/
+
+-- =============================================================================
+-- CRM: Customer Information
+-- =============================================================================
+CREATE OR REPLACE TABLE dev_dw.silver.crm_cust_info (
+    cst_id              INT       COMMENT 'Customer numeric identifier from CRM',
+    cst_key             STRING    COMMENT 'Customer business key; used to join with ERP tables (cid)',
+    cst_firstname       STRING    COMMENT 'Customer first name, trimmed',
+    cst_lastname        STRING    COMMENT 'Customer last name, trimmed',
+    cst_marital_status  STRING    COMMENT 'Marital status: Single, Married or n/a',
+    cst_gndr            STRING    COMMENT 'Gender: Male, Female or n/a',
+    cst_create_date     DATE      COMMENT 'Date the customer record was created in the CRM',
+    dwh_create_date     TIMESTAMP DEFAULT current_timestamp()
+                                  COMMENT 'Timestamp when the record was loaded into the silver layer'
+)
+COMMENT 'Silver layer: cleaned and deduplicated customer information from CRM (one row per cst_id)'
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported'); -- ATIVA USAR DEFAULT NA TABELA
+
+-- =============================================================================
+-- CRM: Product Information
+-- =============================================================================
+CREATE OR REPLACE TABLE dev_dw.silver.crm_prd_info (
+    prd_id              INT       COMMENT 'Product numeric identifier from CRM',
+    cat_id              STRING    COMMENT 'Category ID derived from prd_key; used to join with erp_px_cat_g1v2.id',
+    prd_key             STRING    COMMENT 'Product business key (category prefix removed); used to join with sales',
+    prd_nm              STRING    COMMENT 'Product name',
+    prd_cost            INT       COMMENT 'Product cost; nulls replaced with 0',
+    prd_line            STRING    COMMENT 'Product line standardised: Mountain, Road, Touring, Other Sales or n/a',
+    prd_start_dt        DATE      COMMENT 'Start date of this product version',
+    prd_end_dt          DATE      COMMENT 'End date of this product version (day before next start date); NULL = current version',
+    dwh_create_date     TIMESTAMP DEFAULT current_timestamp()
+                                  COMMENT 'Timestamp when the record was loaded into the silver layer'
+)
+COMMENT 'Silver layer: product information from CRM with history (one row per product version)'
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported');
+
+-- =============================================================================
+-- CRM: Sales Details
+-- =============================================================================
+CREATE OR REPLACE TABLE dev_dw.silver.crm_sales_details (
+    sls_ord_num         STRING    COMMENT 'Sales order number',
+    sls_prd_key         STRING    COMMENT 'Product business key; joins with crm_prd_info.prd_key',
+    sls_cust_id         INT       COMMENT 'Customer identifier; joins with crm_cust_info.cst_id',
+    sls_order_dt        DATE      COMMENT 'Order date, converted from YYYYMMDD integer; invalid values set to NULL',
+    sls_ship_dt         DATE      COMMENT 'Shipping date, converted from YYYYMMDD integer',
+    sls_due_dt          DATE      COMMENT 'Due date, converted from YYYYMMDD integer',
+    sls_sales           INT       COMMENT 'Sales amount; recalculated as quantity * price when missing or inconsistent',
+    sls_quantity        INT       COMMENT 'Quantity of units sold',
+    sls_price           INT       COMMENT 'Unit price; derived from sales / quantity when missing or invalid',
+    dwh_create_date     TIMESTAMP DEFAULT current_timestamp()
+                                  COMMENT 'Timestamp when the record was loaded into the silver layer'
+)
+COMMENT 'Silver layer: sales transactions from CRM (one row per order line)'
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported');
+
+-- =============================================================================
+-- ERP: Customer Extra Information
+-- =============================================================================
+CREATE OR REPLACE TABLE dev_dw.silver.erp_cust_az12 (
+    cid                 STRING    COMMENT 'Customer key with NAS prefix removed; joins with crm_cust_info.cst_key',
+    bdate               DATE      COMMENT 'Customer birth date; future dates set to NULL',
+    gen                 STRING    COMMENT 'Gender standardised: Male, Female or n/a',
+    dwh_create_date     TIMESTAMP DEFAULT current_timestamp()
+                                  COMMENT 'Timestamp when the record was loaded into the silver layer'
+)
+COMMENT 'Silver layer: extra customer information from ERP (one row per cid)'
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported');
+
+-- =============================================================================
+-- ERP: Customer Location
+-- =============================================================================
+CREATE OR REPLACE TABLE dev_dw.silver.erp_loc_a101 (
+    cid                 STRING    COMMENT 'Customer key with hyphens removed; joins with crm_cust_info.cst_key',
+    cntry               STRING    COMMENT 'Country name standardised (e.g. DE -> Germany, US/USA -> United States); blanks set to n/a',
+    dwh_create_date     TIMESTAMP DEFAULT current_timestamp()
+                                  COMMENT 'Timestamp when the record was loaded into the silver layer'
+)
+COMMENT 'Silver layer: customer location from ERP (one row per cid)'
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported');
+
+-- =============================================================================
+-- ERP: Product Categories
+-- =============================================================================
+CREATE OR REPLACE TABLE dev_dw.silver.erp_px_cat_g1v2 (
+    id                  STRING    COMMENT 'Category identifier; joins with crm_prd_info.cat_id',
+    cat                 STRING    COMMENT 'Product category',
+    subcat              STRING    COMMENT 'Product subcategory',
+    maintenance         STRING    COMMENT 'Indicates whether the product requires maintenance (Yes/No)',
+    dwh_create_date     TIMESTAMP DEFAULT current_timestamp()
+                                  COMMENT 'Timestamp when the record was loaded into the silver layer'
+)
+COMMENT 'Silver layer: product category reference data from ERP (one row per category id)'
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported');
+
+-- =============================================================================
+-- LOG: etl_log
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS dev_dw.silver.etl_log (
+  run_id STRING, 
+  layer STRING, 
+  table_name STRING, 
+  status STRING,
+  rows_inserted BIGINT, 
+  start_time TIMESTAMP, 
+  end_time TIMESTAMP,
+  duration_sec DOUBLE, 
+  error_message STRING
+);
